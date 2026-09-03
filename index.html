@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>JTQB 판매사이트 시제품 불러오는 중</title>
+  <style>
+    :root{color-scheme:light;font-family:Pretendard,"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:#142b4a;background:#f6f8fb}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+    main{width:min(560px,100%);background:#fff;border:1px solid #dde3ea;border-radius:20px;padding:40px;text-align:center;box-shadow:0 18px 48px rgba(20,43,74,.10)}
+    .mark{width:68px;height:68px;margin:0 auto 20px;border-radius:18px;display:grid;place-items:center;background:#edf7fd;color:#234e70;font-weight:800;font-size:20px}
+    h1{margin:0 0 12px;font-size:25px}
+    p{margin:0;color:#687386;line-height:1.7}
+    .spinner{width:34px;height:34px;margin:24px auto 0;border:4px solid #dde3ea;border-top-color:#4aa8e8;border-radius:50%;animation:spin .8s linear infinite}
+    #error{display:none;margin-top:24px;padding:16px;border-radius:12px;background:#fff4e5;color:#7a4600;text-align:left;word-break:break-word}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">JTQB</div>
+    <h1>판매사이트 시제품을 불러오고 있습니다</h1>
+    <p>잠시만 기다려 주세요. 이 페이지에는 실제 결제나 개인정보 저장 기능이 없습니다.</p>
+    <div class="spinner" aria-label="불러오는 중"></div>
+    <div id="error" role="alert"></div>
+  </main>
+  <script>
+    (async function loadPrototype() {
+      const paths = [
+        'payload/part-01.txt', 'payload/part-02.txt', 'payload/part-03.txt',
+        'payload/part-04.txt', 'payload/part-05.txt', 'payload/part-06.txt',
+        'payload/part-07.txt'
+      ];
+      try {
+        if (!('DecompressionStream' in window)) {
+          throw new Error('이 브라우저는 시제품 압축 해제를 지원하지 않습니다. 최신 Chrome, Edge, Firefox 또는 Safari로 접속해 주세요.');
+        }
+        const parts = await Promise.all(paths.map(async (path) => {
+          const response = await fetch(path, { cache: 'no-store' });
+          if (!response.ok) throw new Error(path + ' 불러오기 실패 (' + response.status + ')');
+          return response.text();
+        }));
+        const encoded = parts.join('').replace(/\s+/g, '');
+        const binary = atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+        const html = await new Response(stream).text();
+        if (!html.includes('<title>JTQB')) throw new Error('시제품 파일 무결성 확인에 실패했습니다.');
+        document.open();
+        document.write(html);
+        document.close();
+      } catch (error) {
+        console.error(error);
+        document.querySelector('.spinner').style.display = 'none';
+        const panel = document.getElementById('error');
+        panel.style.display = 'block';
+        panel.textContent = '시제품을 불러오지 못했습니다: ' + (error && error.message ? error.message : String(error));
+      }
+    }());
+  </script>
+</body>
+</html>
