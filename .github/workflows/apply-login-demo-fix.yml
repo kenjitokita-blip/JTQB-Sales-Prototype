@@ -1,0 +1,266 @@
+name: Apply login demo fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-login-demo-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-login-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Apply verified login behavior fix
+        shell: bash
+        run: |
+          cat > /tmp/apply_login_fix.py <<'PYFIX'
+          from pathlib import Path
+          import re
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+
+          if (
+              "data-action=\"fill-demo-member\"" in text
+              and "data-action=\"fill-demo-admin\"" in text
+              and "transientStorage = globalThis.sessionStorage" in text
+          ):
+              print('LOGIN_FIX_ALREADY_PRESENT=yes')
+              raise SystemExit(0)
+
+          new_store = r'''function createStore(
+            storage = globalThis.localStorage,
+            key = 'jtqb-sales-prototype-v1',
+            transientStorage = globalThis.sessionStorage,
+          ) {
+            const adapter = storage ?? createMemoryStorage();
+            const sessionAdapter = transientStorage ?? createMemoryStorage();
+            const sessionKey = `${key}-session`;
+            const listeners = new Set();
+            let loadError = null;
+            let state;
+
+            const emptySession = () => ({ userId: null, admin: false, returnTo: null });
+            const normalizeSession = (value) => ({
+              userId: typeof value?.userId === 'string' ? value.userId : null,
+              admin: value?.admin === true,
+              returnTo: typeof value?.returnTo === 'string' ? value.returnTo : null,
+            });
+
+            try {
+              const raw = adapter.getItem(key);
+              state = raw ? JSON.parse(raw) : createInitialState();
+              if (!state || state.version !== 1 || !Array.isArray(state.orders)) {
+                throw new Error('지원하지 않는 시제품 데이터 형식입니다.');
+              }
+            } catch (error) {
+              loadError = error;
+              state = createInitialState();
+            }
+
+            try {
+              const rawSession = sessionAdapter.getItem(sessionKey);
+              state.session = rawSession ? normalizeSession(JSON.parse(rawSession)) : emptySession();
+            } catch {
+              state.session = emptySession();
+            }
+
+            function persist() {
+              try {
+                const persistentState = clone(state);
+                persistentState.session = emptySession();
+                adapter.setItem(key, JSON.stringify(persistentState));
+              } catch (error) {
+                loadError = error;
+              }
+
+              try {
+                sessionAdapter.setItem(sessionKey, JSON.stringify(normalizeSession(state.session)));
+              } catch {
+                // Login remains usable for the current render even if sessionStorage is unavailable.
+              }
+            }
+
+            function notify() {
+              for (const listener of listeners) listener(clone(state));
+            }
+
+            // Scrub legacy login values that older prototype versions stored in localStorage.
+            persist();
+
+            return {
+              getState() {
+                return clone(state);
+              },
+              update(mutator) {
+                const draft = clone(state);
+                const result = mutator(draft);
+                state = result ?? draft;
+                persist();
+                notify();
+                return clone(state);
+              },
+              reset() {
+                state = createInitialState();
+                loadError = null;
+                persist();
+                notify();
+                return clone(state);
+              },
+              subscribe(listener) {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+              },
+              getLoadError() {
+                return loadError;
+              },
+            };
+          }'''
+
+          store_pattern = re.compile(
+              r"function createStore\(storage = globalThis\.localStorage, key = 'jtqb-sales-prototype-v1'\) \{.*?\n\}\n\n\nconst appRoot",
+              re.S,
+          )
+          text, count = store_pattern.subn(new_store + '\n\n\nconst appRoot', text, count=1)
+          if count != 1:
+              raise SystemExit(f'createStore replacement count={count}')
+
+          old_login = '''          <form class="form-stack" data-form="login">
+                      <div class="form-field"><label for="loginEmail">이메일</label><input class="input" id="loginEmail" name="email" type="email" value="user@jtqb.test" autocomplete="username" required /></div>
+                      <div class="form-field"><label for="loginPassword">비밀번호</label><input class="input" id="loginPassword" name="password" type="password" value="jtqb1234" autocomplete="current-password" required /></div>
+                      <button class="btn btn-primary btn-block" type="submit">로그인</button>
+                    </form>'''
+          new_login = '''          <form class="form-stack" data-form="login" autocomplete="off">
+                      <div class="form-field"><label for="loginEmail">이메일</label><input class="input" id="loginEmail" name="email" type="email" placeholder="이메일을 입력하세요" autocomplete="off" required /></div>
+                      <div class="form-field"><label for="loginPassword">비밀번호</label><input class="input" id="loginPassword" name="password" type="password" placeholder="비밀번호를 입력하세요" autocomplete="new-password" required /></div>
+                      <button class="btn btn-outline btn-block" type="button" data-action="fill-demo-member">체험 계정 자동 입력</button>
+                      <button class="btn btn-primary btn-block" type="submit">로그인</button>
+                    </form>'''
+          if text.count(old_login) != 1:
+              raise SystemExit(f'customer login replacement count={text.count(old_login)}')
+          text = text.replace(old_login, new_login, 1)
+
+          old_admin = '''        <form class="form-stack" data-form="admin-login">
+                    <div class="form-field"><label for="adminId">관리자 아이디</label><input class="input" id="adminId" name="id" value="admin" required /></div>
+                    <div class="form-field"><label for="adminPassword">비밀번호</label><input class="input" id="adminPassword" name="password" type="password" value="admin1234" required /></div>
+                    <button class="btn btn-primary btn-block" type="submit">관리자 체험 시작</button>
+                    <a class="btn btn-outline btn-block" href="#/">고객 사이트로 돌아가기</a>
+                  </form>'''
+          new_admin = '''        <form class="form-stack" data-form="admin-login" autocomplete="off">
+                    <div class="form-field"><label for="adminId">관리자 아이디</label><input class="input" id="adminId" name="id" placeholder="관리자 아이디를 입력하세요" autocomplete="off" required /></div>
+                    <div class="form-field"><label for="adminPassword">비밀번호</label><input class="input" id="adminPassword" name="password" type="password" placeholder="비밀번호를 입력하세요" autocomplete="new-password" required /></div>
+                    <button class="btn btn-outline btn-block" type="button" data-action="fill-demo-admin">관리자 체험 계정 자동 입력</button>
+                    <button class="btn btn-primary btn-block" type="submit">관리자 체험 시작</button>
+                    <a class="btn btn-outline btn-block" href="#/">고객 사이트로 돌아가기</a>
+                  </form>'''
+          if text.count(old_admin) != 1:
+              raise SystemExit(f'admin login replacement count={text.count(old_admin)}')
+          text = text.replace(old_admin, new_admin, 1)
+
+          old_click = '''  const action = actionElement.dataset.action;
+
+            if (action === 'toggle-menu') {'''
+          new_click = '''  const action = actionElement.dataset.action;
+
+            if (action === 'fill-demo-member') {
+              event.preventDefault();
+              const emailInput = document.querySelector('#loginEmail');
+              const passwordInput = document.querySelector('#loginPassword');
+              if (emailInput && passwordInput) {
+                emailInput.value = SITE_CONFIG.demoUser.email;
+                passwordInput.value = SITE_CONFIG.demoUser.password;
+                passwordInput.focus();
+                showToast('체험 계정을 입력했습니다. 로그인 버튼을 눌러주세요.');
+              }
+              return;
+            }
+            if (action === 'fill-demo-admin') {
+              event.preventDefault();
+              const idInput = document.querySelector('#adminId');
+              const passwordInput = document.querySelector('#adminPassword');
+              if (idInput && passwordInput) {
+                idInput.value = SITE_CONFIG.demoAdmin.id;
+                passwordInput.value = SITE_CONFIG.demoAdmin.password;
+                passwordInput.focus();
+                showToast('관리자 체험 계정을 입력했습니다. 로그인 버튼을 눌러주세요.');
+              }
+              return;
+            }
+            if (action === 'toggle-menu') {'''
+          if text.count(old_click) != 1:
+              raise SystemExit(f'click handler insertion count={text.count(old_click)}')
+          text = text.replace(old_click, new_click, 1)
+
+          for forbidden in (
+              'id="loginEmail" name="email" type="email" value="user@jtqb.test"',
+              'id="loginPassword" name="password" type="password" value="jtqb1234"',
+              'id="adminId" name="id" value="admin"',
+              'id="adminPassword" name="password" type="password" value="admin1234"',
+          ):
+              if forbidden in text:
+                  raise SystemExit(f'forbidden prefill remains: {forbidden}')
+
+          required = (
+              'data-action="fill-demo-member"',
+              'data-action="fill-demo-admin"',
+              'transientStorage = globalThis.sessionStorage',
+              'persistentState.session = emptySession();',
+          )
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f'missing required marker: {marker}')
+
+          path.write_text(text, encoding='utf-8')
+          print('LOGIN_FIX_APPLIED=yes')
+          PYFIX
+          python3 /tmp/apply_login_fix.py
+
+      - name: Verify syntax and intended diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          html = Path('index.html').read_text(encoding='utf-8')
+          script = re.search(r'<script>(.*)</script>', html, re.S)
+          if not script:
+              raise SystemExit('inline script not found')
+          Path('/tmp/jtqb-app.js').write_text(script.group(1), encoding='utf-8')
+
+          required = [
+              'data-action="fill-demo-member"',
+              'data-action="fill-demo-admin"',
+              'transientStorage = globalThis.sessionStorage',
+              'persistentState.session = emptySession();',
+          ]
+          for marker in required:
+              if marker not in html:
+                  raise SystemExit(f'missing marker: {marker}')
+          PY
+          node --check /tmp/jtqb-app.js
+          git diff --check
+
+      - name: Commit login fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- index.html; then
+            echo 'LOGIN_FIX_COMMIT=SKIPPED_ALREADY_PRESENT'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'fix: require explicit demo credential entry'
+          git push
+          echo 'LOGIN_FIX_COMMIT=CREATED'
