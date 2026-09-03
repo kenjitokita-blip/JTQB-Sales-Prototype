@@ -1,0 +1,68 @@
+name: Public site smoke test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-http-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Verify anonymous HTTPS access and deployed JTQB content
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          url="https://kenjitokita-blip.github.io/JTQB-Sales-Prototype/"
+          body_file="$(mktemp)"
+          success=0
+
+          for attempt in $(seq 1 30); do
+            result="$(
+              curl \
+                --location \
+                --silent \
+                --show-error \
+                --output "$body_file" \
+                --write-out '%{http_code}|%{url_effective}|%{remote_ip}|%{ssl_verify_result}|%{time_total}' \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --header 'Cache-Control: no-cache' \
+                "${url}?public-smoke=${GITHUB_SHA}-${attempt}" \
+                || true
+            )"
+
+            IFS='|' read -r http_code final_url remote_ip ssl_verify_result time_total <<< "$result"
+            body_bytes="$(wc -c < "$body_file" | tr -d ' ')"
+
+            echo "attempt=$attempt http_code=$http_code final_url=$final_url remote_ip=$remote_ip ssl_verify_result=$ssl_verify_result body_bytes=$body_bytes time_total=$time_total"
+
+            if [[ "$http_code" == "200" ]] \
+              && [[ "$ssl_verify_result" == "0" ]] \
+              && grep -Fq '<title>JTQB | 응급처치학개론 문제 학습</title>' "$body_file" \
+              && grep -Fq '응급처치학개론' "$body_file"; then
+              success=1
+              break
+            fi
+
+            sleep 10
+          done
+
+          if [[ "$success" != "1" ]]; then
+            echo 'PUBLIC_SMOKE=FAIL'
+            echo 'The public URL did not return the expected JTQB page over verified HTTPS.'
+            exit 1
+          fi
+
+          echo 'PUBLIC_SMOKE=PASS'
+          echo "PUBLIC_URL=$url"
+          echo "HTTP_STATUS=$http_code"
+          echo "HTTPS_CERTIFICATE_VERIFIED=$([[ "$ssl_verify_result" == "0" ]] && echo yes || echo no)"
+          echo "ANONYMOUS_REQUEST=yes"
+          echo "DEPLOYED_TITLE_MATCH=yes"
