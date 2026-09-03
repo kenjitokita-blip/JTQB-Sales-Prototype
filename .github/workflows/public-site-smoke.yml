@@ -14,13 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 7
     steps:
-      - name: Verify anonymous HTTPS access and deployed JTQB content
+      - name: Checkout deployed source
+        uses: actions/checkout@v5
+
+      - name: Verify anonymous HTTPS access and exact deployed JTQB content
         shell: bash
         run: |
           set -euo pipefail
 
           url="https://kenjitokita-blip.github.io/JTQB-Sales-Prototype/"
           body_file="$(mktemp)"
+          expected_sha256="$(sha256sum index.html | awk '{print $1}')"
           success=0
 
           for attempt in $(seq 1 30); do
@@ -40,11 +44,13 @@ jobs:
 
             IFS='|' read -r http_code final_url remote_ip ssl_verify_result time_total <<< "$result"
             body_bytes="$(wc -c < "$body_file" | tr -d ' ')"
+            live_sha256="$(sha256sum "$body_file" | awk '{print $1}')"
 
-            echo "attempt=$attempt http_code=$http_code final_url=$final_url remote_ip=$remote_ip ssl_verify_result=$ssl_verify_result body_bytes=$body_bytes time_total=$time_total"
+            echo "attempt=$attempt http_code=$http_code final_url=$final_url remote_ip=$remote_ip ssl_verify_result=$ssl_verify_result body_bytes=$body_bytes time_total=$time_total expected_sha256=$expected_sha256 live_sha256=$live_sha256"
 
             if [[ "$http_code" == "200" ]] \
               && [[ "$ssl_verify_result" == "0" ]] \
+              && [[ "$live_sha256" == "$expected_sha256" ]] \
               && grep -Fq '<title>JTQB | 응급처치학개론 문제 학습</title>' "$body_file" \
               && grep -Fq '응급처치학개론' "$body_file"; then
               success=1
@@ -56,7 +62,7 @@ jobs:
 
           if [[ "$success" != "1" ]]; then
             echo 'PUBLIC_SMOKE=FAIL'
-            echo 'The public URL did not return the expected JTQB page over verified HTTPS.'
+            echo 'The public URL did not return the exact committed JTQB page over verified HTTPS.'
             exit 1
           fi
 
@@ -66,3 +72,5 @@ jobs:
           echo "HTTPS_CERTIFICATE_VERIFIED=$([[ "$ssl_verify_result" == "0" ]] && echo yes || echo no)"
           echo "ANONYMOUS_REQUEST=yes"
           echo "DEPLOYED_TITLE_MATCH=yes"
+          echo "DEPLOYED_SHA256_MATCH=yes"
+          echo "INDEX_SHA256=$expected_sha256"
